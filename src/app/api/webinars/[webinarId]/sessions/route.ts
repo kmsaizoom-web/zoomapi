@@ -1,26 +1,40 @@
-import { NextResponse } from "next/server";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+import { NextRequest } from "next/server";
 import { listWebinarOccurrences } from "@/lib/zoom";
-import { isFuture, formatLabel } from "@/lib/time";
 
-export async function GET(_: Request, { params }: { params: { webinarId: string } }) {
+function fmtShortLabel(iso: string): string {
+  const d = new Date(iso);
+  return d.toUTCString().replace(" GMT", "");
+}
+
+export async function GET(_req: NextRequest, context: { params: { webinarId: string } }) {
+  const webinarId = (context.params?.webinarId || "").trim();
+  if (!webinarId) {
+    return new Response(JSON.stringify({ ok: false, error: "Missing webinarId" }), {
+      status: 400,
+      headers: { "content-type": "application/json" }
+    });
+  }
   try {
-    const { webinarId } = params;
-    if (!webinarId) return NextResponse.json({ error: "Missing webinarId" }, { status: 400 });
-
-    const occurrences = await listWebinarOccurrences(webinarId);
-
-    const upcoming = occurrences
-      .filter(o => isFuture(o.startsAtIso))
-      .sort((a, b) => new Date(a.startsAtIso).getTime() - new Date(b.startsAtIso).getTime())
-      .map(o => ({
-        webinarId,
-        occurrenceId: o.occurrenceId,
-        startsAtIso: o.startsAtIso,
-        label: formatLabel(o.startsAtIso),
-      }));
-
-    return NextResponse.json(upcoming);
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Failed to fetch sessions" }, { status: 500 });
+    const occs = await listWebinarOccurrences(webinarId);
+    const out = occs.map((o) => ({
+      webinarId: o.webinarId,
+      occurrenceId: o.occurrenceId,
+      startsAtIso: o.startsAtIso,
+      label: fmtShortLabel(o.startsAtIso)
+    }));
+    return new Response(JSON.stringify(out), {
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" }
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to list sessions";
+    return new Response(JSON.stringify({ ok: false, error: msg }), {
+      status: 500,
+      headers: { "content-type": "application/json" }
+    });
   }
 }
