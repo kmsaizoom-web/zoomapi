@@ -1,7 +1,4 @@
-// Helpers to fetch a GHL contact strictly by core contact.phone (HK-friendly normalization)
-// and to read the custom field {{ contact.zoom_display_name }} as the display name.
-
-type Json = Record<string, unknown>;
+// Helpers for GHL contact lookup and custom-field extraction (zoom_display_name)
 
 export interface GhlCustomKV {
   id: string;
@@ -14,74 +11,51 @@ export interface GhlContact {
   email?: string | null;
   phone?: string | null;
   customField?: GhlCustomKV[];   // some accounts
-  customFields?: GhlCustomKV[];  // other accounts
+  customFields?: GhlCustomKV[];  // others
   [k: string]: unknown;
 }
-interface ContactsShape {
-  contacts?: GhlContact[];
-  items?: GhlContact[];
-  data?: GhlContact[];
-  [k: string]: unknown;
-}
+type Json = Record<string, unknown>;
 
-const REQUIRED_ENV = ["GHL_API_KEY"] as const;
-function reqEnv(name: (typeof REQUIRED_ENV)[number]): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing required env ${name}`);
-  return v;
-}
+const GHL_API_KEY = process.env.GHL_API_KEY;
+if (!GHL_API_KEY) throw new Error("Missing env GHL_API_KEY");
 
-const DEFAULT_BASES = [
-  process.env.GHL_BASE_URL?.replace(/\/+$/, "") || "https://rest.gohighlevel.com",
-  "https://services.leadconnectorhq.com",
-] as const;
+const BASES = [
+  (process.env.GHL_BASE_URL || "https://rest.gohighlevel.com").replace(/\/+$/, ""),
+  "https://services.leadconnectorhq.com"
+];
 
-function toQuery(params: Record<string, string | number | undefined>): string {
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) sp.set(k, String(v));
-  }
-  const s = sp.toString();
+function qs(params: Record<string, string | number | undefined>) {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) u.set(k, String(v));
+  const s = u.toString();
   return s ? `?${s}` : "";
 }
 
-async function ghlGet(path: string, params: Record<string, string | number | undefined>): Promise<Json> {
-  const token = reqEnv("GHL_API_KEY");
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/json",
-  };
-  const qs = toQuery(params);
-  const errors: string[] = [];
-
-  for (const base of DEFAULT_BASES) {
-    const url = `${base}${path}${qs}`;
+async function ghlGet(path: string, params: Record<string, string | number | undefined> = {}): Promise<Json> {
+  const headers = { Authorization: `Bearer ${GHL_API_KEY}`, Accept: "application/json" };
+  const query = qs(params);
+  const errs: string[] = [];
+  for (const base of BASES) {
     try {
-      const r = await fetch(url, { headers, cache: "no-store" });
+      const r = await fetch(`${base}${path}${query}`, { headers, cache: "no-store" });
       const text = await r.text();
-      if (r.ok) {
-        if (!text) return {};
-        try { return JSON.parse(text) as Json; }
-        catch { return { _raw_text: text } as Json; }
-      } else {
-        if (r.status === 429) {
-          const ra = r.headers.get("Retry-After");
-          if (ra) {
-            const ms = Math.max(0, Number(ra) * 1000);
-            if (ms) await new Promise(res => setTimeout(res, ms));
-          }
-        }
-        errors.push(`${base} -> ${r.status} ${text || ""}`);
+      let data: any = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { _raw_text: text }; }
+      if (r.ok) return data;
+      if (r.status === 429) {
+        const ra = r.headers.get("Retry-After");
+        if (ra) await new Promise(res => setTimeout(res, Number(ra) * 1000));
       }
-    } catch (e) {
-      errors.push(`${base} -> ${String(e)}`);
+      errs.push(`${base} -> ${r.status}: ${text}`);
+    } catch (e: any) {
+      errs.push(`${base} -> ${String(e)}`);
     }
   }
-  throw new Error(`All GHL bases failed for ${path}${qs}\n${errors.join("\n")}`);
+  throw new Error(`All GHL hosts failed for ${path}${query}\n` + errs.join("\n"));
 }
 
 function pickContactsArray(data: Json): GhlContact[] {
-  const d = data as ContactsShape;
+  const d: any = data;
   if (Array.isArray(d.contacts)) return d.contacts;
   if (Array.isArray(d.items)) return d.items;
   if (Array.isArray(d.data)) return d.data;
@@ -91,59 +65,50 @@ function pickContactsArray(data: Json): GhlContact[] {
   return [];
 }
 
-// -------- Phone normalization (HK-centric but safe elsewhere) --------
-function normalizeToE164HK(input: string): string {
+// ---- phone normalization (HK friendly) ----
+function normalizeE164HK(input: string): string {
   let s = (input || "").trim();
   if (!s) return s;
   if (s.startsWith("00")) s = `+${s.slice(2)}`;
   if (s.startsWith("+")) return s.replace(/[^\d+]/g, "");
   const digits = s.replace(/\D/g, "");
-  if (!digits) return s;
-  if (/^\d{8}$/.test(digits)) return `+852${digits}`;   // HK local
-  if (/^852\d{8}$/.test(digits)) return `+${digits}`;   // HK with 852
-  return `+${digits}`;                                   // generic
+  if (/^\d{8}$/.test(digits)) return `+852${digits}`;
+  if (/^852\d{8}$/.test(digits)) return `+${digits}`;
+  return `+${digits}`;
 }
-
-function unique<T>(arr: T[]): T[] {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const v of arr) {
-    const k = JSON.stringify(v);
-    if (!seen.has(k)) { seen.add(k); out.push(v); }
-  }
+function uniq<T>(arr: T[]): T[] {
+  const seen = new Set<string>(); const out: T[] = [];
+  for (const v of arr) { const k = JSON.stringify(v); if (!seen.has(k)) { seen.add(k); out.push(v); } }
   return out;
 }
-function buildPhoneSearchVariants(raw: string): string[] {
-  const e164 = normalizeToE164HK(raw);
+function phoneCandidates(raw: string): string[] {
+  const e164 = normalizeE164HK(raw);
   const digits = raw.replace(/\D/g, "");
-  const cands: string[] = [e164];
+  const cands = [e164];
   if (e164.startsWith("+")) cands.push(e164.slice(1));
-  if (digits && digits !== e164.replace(/\D/g, "")) cands.push(digits);
-  if (/^\d{8}$/.test(digits)) cands.push(`852${digits}`);
-  return unique(cands).filter(Boolean);
+  if (/^\d{8}$/.test(digits)) cands.push(`852${digits}`, digits);
+  else cands.push(digits);
+  return uniq(cands).filter(Boolean);
 }
 
-// Only accept rows whose **core contact.phone** === normalized target
-async function findByCorePhoneStrict(targetRaw: string): Promise<GhlContact | null> {
-  const normalizedTarget = normalizeToE164HK(targetRaw);
-  if (!normalizedTarget) return null;
-
-  const queries = buildPhoneSearchVariants(targetRaw);
-  const limitPerPage = 25;
-  const maxPagesPerQuery = 2;
+// Search and only accept where core contact.phone matches normalized target
+async function findByCorePhoneStrict(raw: string): Promise<GhlContact | null> {
+  const target = normalizeE164HK(raw);
+  if (!target) return null;
+  const queries = phoneCandidates(raw);
+  const limit = 25;
+  const maxPages = 2;
 
   for (const q of queries) {
-    for (let page = 1; page <= maxPagesPerQuery; page++) {
-      const data = await ghlGet("/v1/contacts/", { query: q, limit: limitPerPage, page });
+    for (let page = 1; page <= maxPages; page++) {
+      const data = await ghlGet("/v1/contacts/", { query: q, limit, page });
       const arr = pickContactsArray(data);
       if (!arr.length) break;
-
       for (const c of arr) {
-        const phone = typeof c.phone === "string" ? c.phone : "";
-        const norm = phone ? normalizeToE164HK(phone) : "";
-        if (norm && norm === normalizedTarget) return c;
+        const p = typeof c.phone === "string" ? c.phone : "";
+        if (p && normalizeE164HK(p) === target) return c;
       }
-      if (arr.length < limitPerPage) break;
+      if (arr.length < limit) break;
     }
   }
   return null;
@@ -154,65 +119,54 @@ export async function findContactByPhone(phoneRaw: string): Promise<GhlContact |
   try { return await findByCorePhoneStrict(phoneRaw.trim()); } catch { return null; }
 }
 
-// -------- Custom field helpers --------
-const cfKeyToIdCache = new Map<string, string | null>();
+// ---- zoom_display_name custom field resolution ----
+function valueToString(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return v.map(valueToString).join(" ");
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    for (const k of ["label", "value", "name", "title"]) if (typeof o[k] === "string") return String(o[k]);
+    try { return JSON.stringify(v); } catch { return ""; }
+  }
+  return "";
+}
 
-async function getCustomFieldIdByKey(fieldKey: string): Promise<string | null> {
-  if (cfKeyToIdCache.has(fieldKey)) return cfKeyToIdCache.get(fieldKey)!;
+const cfKeyCache = new Map<string, string | null>();
 
-  let page = 1;
-  const limit = 200;
-  let found: string | null = null;
-
-  while (page <= 30) {
-    const data = await ghlGet("/v1/custom-fields/", { limit, page });
-    const arr =
-      (Array.isArray((data as any)?.customFields) ? (data as any).customFields
-      : Array.isArray((data as any)?.fields) ? (data as any).fields
-      : Array.isArray((data as any)?.data) ? (data as any).data
-      : []) as Array<{ id?: string; name?: string; fieldKey?: string }>;
+export async function getCustomFieldIdByKey(fieldKey: string): Promise<string | null> {
+  if (cfKeyCache.has(fieldKey)) return cfKeyCache.get(fieldKey)!;
+  let page = 1; const limit = 200; let found: string | null = null;
+  while (page <= 40) {
+    const data: any = await ghlGet("/v1/custom-fields/", { limit, page });
+    const arr: any[] = Array.isArray(data?.customFields) ? data.customFields
+                   : Array.isArray(data?.fields) ? data.fields
+                   : Array.isArray(data?.data) ? data.data : [];
     if (!arr.length) break;
-
     for (const f of arr) {
-      const key = (f.fieldKey || f.name || "").toString();
+      const key = String(f.fieldKey || f.name || "");
       if (key === fieldKey) { found = f.id || null; break; }
     }
     if (found || arr.length < limit) break;
     page++;
   }
-
-  cfKeyToIdCache.set(fieldKey, found);
+  cfKeyCache.set(fieldKey, found);
   return found;
 }
 
-function valueToString(val: unknown): string {
-  if (val == null) return "";
-  if (typeof val === "string") return val;
-  if (typeof val === "number" || typeof val === "boolean") return String(val);
-  if (Array.isArray(val)) return val.map(valueToString).join(" ");
-  if (typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    for (const key of ["label", "value", "name", "title"]) {
-      if (typeof obj[key] === "string") return String(obj[key]);
-    }
-    try { return JSON.stringify(val); } catch { return ""; }
-  }
-  return "";
-}
-
-// Extract the value of {{ contact.zoom_display_name }} from a contact
 export async function extractZoomDisplayName(contact: GhlContact): Promise<string | null> {
   const key = "contact.zoom_display_name";
   const id = await getCustomFieldIdByKey(key);
-  const bags: (GhlCustomKV[] | undefined)[] = [contact.customField, contact.customFields];
-
+  const lists = [contact.customField, contact.customFields];
   if (id) {
-    for (const arr of bags) {
+    for (const arr of lists) {
       if (!Array.isArray(arr)) continue;
-      for (const cf of arr) {
-        if (cf?.id === id) {
-          const v = valueToString(cf.value).trim();
-          if (v) return v;
+      for (const kv of arr) {
+        if (!kv || !kv.id) continue;
+        if (kv.id === id) {
+          const s = valueToString(kv.value).trim();
+          if (s) return s;
         }
       }
     }
