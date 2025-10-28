@@ -9,6 +9,9 @@ import { listWebinarOccurrences, registerZoomRegistrantSmart } from "@/lib/zoom"
 type OccurrenceView = { webinarId: string; occurrenceId: string; startsAtIso: string };
 const ALWAYS_ALIAS_EMAIL = (process.env.ALWAYS_ALIAS_EMAIL || "").toLowerCase() === "true";
 
+// Use a zero-width space for empty last names so Zoom doesn't show a dash.
+const EMPTY_LAST_NAME = "\u200B"; // U+200B
+
 function parseSession(s: string) {
   const [w, occ] = (s || "").split("|");
   return { webinarId: (w || "").trim(), occurrenceId: ((occ || "").trim() || null) };
@@ -42,15 +45,24 @@ function aliasEmailFor(phoneMaybe?: string, contactId?: string, nameVariant?: st
   return `noemail+${base}${suf}@example.com`;
 }
 
+/**
+ * Improved sanitizer to remove quotes, dashes, and odd trailing punctuation
+ */
 function sanitizeName(s: string, max = 96) {
   let x = (s || "").normalize("NFKC");
-  // strip emails / long numbers / separators
+
+  // Remove any wrapping quotes or dashes
+  x = x.replace(/^["'“”‘’\-–—\s]+|["'“”‘’\-–—\s]+$/g, "");
+
+  // strip emails, long numbers, separators
   x = x.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, " ");
   x = x.replace(/\+?\d[\d\s\-()]{6,}/g, " ");
   x = x.split("@")[0].split("#")[0].split("|")[0];
+
   // strip emojis & odd punct
   try { x = x.replace(/\p{Extended_Pictographic}/gu, ""); } catch {}
-  x = x.replace(/[^\p{L}\p{N}\s\-'. ,]/gu, " ").replace(/\s+/g, " ").trim();
+  x = x.replace(/[^\p{L}\p{N}\s\-'.]/gu, " ").replace(/\s+/g, " ").trim();
+
   if (x.length > max) x = x.slice(0, max);
   return x;
 }
@@ -58,29 +70,27 @@ function sanitizeName(s: string, max = 96) {
 function looksLikePlaceholder(v: string) {
   const s = (v ?? "").trim();
   if (!s) return true;
-  if (/^\{\{.*\}\}$/.test(s)) return true;               // e.g., {{contact.zoom_name}}
-  if (/^(null|undefined|na|n\/a)$/i.test(s)) return true; // common “empty” strings
+  if (/^\{\{.*\}\}$/.test(s)) return true;
+  if (/^(null|undefined|na|n\/a)$/i.test(s)) return true;
   return false;
 }
 
-/** Decide display name + source:
- *   1) Use GHL zoom_display_name if present (after sanitize) -> source "ghl"
- *   2) Else use form-provided zoomName if present & not placeholder (after sanitize) -> source "form"
- *   3) Else "Guest" -> source "fallback"
+/**
+ * Decide display name with robust fallback:
+ *   1) GHL zoom_display_name
+ *   2) form zoomName
+ *   3) "Guest"
  */
-function pickDisplayNameAndSource(
-  ghlName?: string | null,
-  formName?: string | null
-): { name: string; source: "ghl" | "form" | "fallback" } {
+function pickDisplayName(ghlName?: string | null, formName?: string | null) {
   const c1 = sanitizeName((ghlName ?? "").trim());
-  if (c1) return { name: c1, source: "ghl" };
+  if (c1) return c1;
 
   const rawForm = (formName ?? "").trim();
   if (!looksLikePlaceholder(rawForm)) {
     const c2 = sanitizeName(rawForm);
-    if (c2) return { name: c2, source: "form" };
+    if (c2) return c2;
   }
-  return { name: "Guest", source: "fallback" };
+  return "Guest";
 }
 
 export async function GET(req: Request) {
@@ -88,7 +98,6 @@ export async function GET(req: Request) {
 
   const session = (searchParams.get("session") || "").trim();
   const phoneRaw = (searchParams.get("phone") || "").trim();
-  // IMPORTANT: the key must match your form: &zoomName={{contact.zoom_name}}
   const zoomNameFromForm = (searchParams.get("zoomName") || "").trim();
 
   if (!session || !phoneRaw) {
@@ -111,10 +120,7 @@ export async function GET(req: Request) {
     );
   }
 
-  // Try to locate contact in GHL by phone
   const contact = await findContactByPhone(phoneRaw);
-
-  // Extract candidate pieces
   let ghlDisplayName = "";
   let phoneForZoom = phoneRaw;
   let realEmail = "";
@@ -129,32 +135,20 @@ export async function GET(req: Request) {
     realEmail = (contact.email || "").trim();
   }
 
-  // PICK FINAL DISPLAY NAME + SOURCE
-  const picked = pickDisplayNameAndSource(ghlDisplayName, zoomNameFromForm);
-  const display = picked.name;
+  const display = pickDisplayName(ghlDisplayName, zoomNameFromForm);
 
-  // Build first/last for Zoom:
-  // - If the name came from the FORM, force the webinar display to "<FormName> -"
-  //   by sending first_name = "<FormName>" and last_name = "-"
-  // - Otherwise, keep your normal split
-  let firstNameForZoom: string;
-  let lastNameForZoom: string;
-
-  if (picked.source === "form") {
-    firstNameForZoom = sanitizeName(display) || "Guest";
-    lastNameForZoom = "-"; // results in "<FormName> -" in Zoom
-  } else {
-    const [first, ...rest] = display.split(/\s+/);
-    firstNameForZoom = sanitizeName(first) || "Guest";
-    lastNameForZoom = sanitizeName(rest.join(" ") || "-") || "-";
+  // Split the display name. If there's no last token, pass a zero-width space so Zoom doesn't show a dash.
+  const [firstRaw, ...restParts] = display.split(/\s+/);
+  const firstNameForZoom = sanitizeName(firstRaw) || "Guest";
+  let lastNameForZoom = sanitizeName(restParts.join(" "));
+  if (!lastNameForZoom) {
+    lastNameForZoom = EMPTY_LAST_NAME; // invisible last name; renders as just "Justin"
   }
 
-  // Email (respect ALWAYS_ALIAS_EMAIL)
   const email = ALWAYS_ALIAS_EMAIL
     ? aliasEmailFor(phoneForZoom, contact?.id, display)
     : (realEmail || aliasEmailFor(phoneForZoom, contact?.id, display));
 
-  // Register (with reuse/lookup handled inside your zoom helper)
   const reg = await registerZoomRegistrantSmart({
     webinarId,
     occurrenceId: occ,
