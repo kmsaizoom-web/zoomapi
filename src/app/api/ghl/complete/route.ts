@@ -63,22 +63,24 @@ function looksLikePlaceholder(v: string) {
   return false;
 }
 
-/**
- * Decide display name with robust fallback:
- *   1) Use GHL zoom_display_name if present (after sanitize)
- *   2) Else use the form-provided zoomName if present & not placeholder (after sanitize)
- *   3) Else "Guest"
+/** Decide display name + source:
+ *   1) Use GHL zoom_display_name if present (after sanitize) -> source "ghl"
+ *   2) Else use form-provided zoomName if present & not placeholder (after sanitize) -> source "form"
+ *   3) Else "Guest" -> source "fallback"
  */
-function pickDisplayName(ghlName?: string | null, formName?: string | null) {
+function pickDisplayNameAndSource(
+  ghlName?: string | null,
+  formName?: string | null
+): { name: string; source: "ghl" | "form" | "fallback" } {
   const c1 = sanitizeName((ghlName ?? "").trim());
-  if (c1) return c1;
+  if (c1) return { name: c1, source: "ghl" };
 
   const rawForm = (formName ?? "").trim();
   if (!looksLikePlaceholder(rawForm)) {
     const c2 = sanitizeName(rawForm);
-    if (c2) return c2;
+    if (c2) return { name: c2, source: "form" };
   }
-  return "Guest";
+  return { name: "Guest", source: "fallback" };
 }
 
 export async function GET(req: Request) {
@@ -127,12 +129,25 @@ export async function GET(req: Request) {
     realEmail = (contact.email || "").trim();
   }
 
-  // PICK FINAL DISPLAY NAME (core fix)
-  const display = pickDisplayName(ghlDisplayName, zoomNameFromForm);
+  // PICK FINAL DISPLAY NAME + SOURCE
+  const picked = pickDisplayNameAndSource(ghlDisplayName, zoomNameFromForm);
+  const display = picked.name;
 
-  // Zoom likes first/last split; provide minimal last if missing
-  const [firstNameForZoom, ...restParts] = display.split(/\s+/);
-  const lastNameForZoom = restParts.join(" ") || "-";
+  // Build first/last for Zoom:
+  // - If the name came from the FORM, force the webinar display to "<FormName> -"
+  //   by sending first_name = "<FormName>" and last_name = "-"
+  // - Otherwise, keep your normal split
+  let firstNameForZoom: string;
+  let lastNameForZoom: string;
+
+  if (picked.source === "form") {
+    firstNameForZoom = sanitizeName(display) || "Guest";
+    lastNameForZoom = "-"; // results in "<FormName> -" in Zoom
+  } else {
+    const [first, ...rest] = display.split(/\s+/);
+    firstNameForZoom = sanitizeName(first) || "Guest";
+    lastNameForZoom = sanitizeName(rest.join(" ") || "-") || "-";
+  }
 
   // Email (respect ALWAYS_ALIAS_EMAIL)
   const email = ALWAYS_ALIAS_EMAIL
@@ -143,8 +158,8 @@ export async function GET(req: Request) {
   const reg = await registerZoomRegistrantSmart({
     webinarId,
     occurrenceId: occ,
-    firstName: sanitizeName(firstNameForZoom) || "Guest",
-    lastName: sanitizeName(lastNameForZoom) || "-",
+    firstName: firstNameForZoom,
+    lastName: lastNameForZoom,
     email,
     phone: phoneForZoom
   });
