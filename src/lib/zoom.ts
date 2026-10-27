@@ -128,3 +128,31 @@ export async function registerZoomRegistrantSmart(params: {
     throw e;
   }
 }
+// ============================================================
+// [出席計時] 拉 Zoom 課堂參加者報告（含停留秒數）
+// 課後 attendance API 用，唔影響入課登記
+// ============================================================
+export type ZoomParticipant = {
+  name?: string;
+  user_email?: string;
+  duration?: number;
+  join_time?: string;
+  leave_time?: string;
+};
+
+export async function getWebinarParticipants(webinarId: string): Promise<ZoomParticipant[]> {
+  const all: ZoomParticipant[] = [];
+  let pageToken = "";
+  for (let i = 0; i < 20; i++) {
+    const qs = new URLSearchParams({ page_size: "300" });
+    if (pageToken) qs.set("next_page_token", pageToken);
+    const r = await zoomFetch(`/v2/report/webinars/${encodeURIComponent(webinarId)}/participants?${qs}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(`Zoom report failed: ${r.status} ${JSON.stringify(data)}`);
+    const arr = Array.isArray(data.participants) ? data.participants : [];
+    all.push(...arr);
+    pageToken = String(data.next_page_token || "");
+    if (!pageToken) break;
+  }
+  return all;
+}
