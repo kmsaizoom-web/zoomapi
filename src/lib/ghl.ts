@@ -219,3 +219,29 @@ export async function extractZoomDisplayName(contact: GhlContact): Promise<strin
   }
   return null;
 }
+// ============================================================
+// [出席計時] 更新 GHL contact 自訂欄位（停留分鐘 / 可收費）
+// 課後 attendance API 用，唔影響入課時搵 contact
+// ============================================================
+export async function updateContactCustomField(contactId: string, fieldKey: string, value: string | number): Promise<boolean> {
+  const token = reqEnv("GHL_API_KEY");
+  const fieldId = await getCustomFieldIdByKey(fieldKey);
+  if (!fieldId) return false;
+
+  const body = { customField: [{ id: fieldId, value: String(value) }] };
+  for (const base of DEFAULT_BASES) {
+    try {
+      const r = await fetch(`${base}/v1/contacts/${contactId}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) return true;
+    } catch {}
+  }
+  return false;
+}
