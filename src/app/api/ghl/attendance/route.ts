@@ -1,16 +1,21 @@
 // ============================================================
 // [出席計時]
 // 1. 入課電話對 contact.Phone
-// 2. 讀該 contact 的 Student Phone / Parent Phone
-// 3. 再搵 Student Phone 或 Parent Phone 等於該號碼的 contact
-// 4. 全部寫入同一套出席時間
+// 2. 用 field id 讀該 contact 的 Student Phone / Parent Phone
+// 3. 再用該號碼對 Phone，以及 Student Phone / Parent Phone 欄
+// 4. 全部寫入同一套出席分鐘同 Chargeable
 // ============================================================
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { getWebinarParticipants } from "@/lib/zoom";
-import { findContactByPhone, findContactsByCustomPhone, updateContactCustomField } from "@/lib/ghl";
+import {
+  findContactByPhone,
+  findContactsByCustomPhone,
+  updateContactCustomField,
+  getCustomFieldIdByKey,
+} from "@/lib/ghl";
 
 const MIN_SECONDS = 60 * 60;
 const FIELD_MINUTES = "contact.attendance_minutes";
@@ -27,9 +32,10 @@ function extractPhoneFromAlias(email: string): string | null {
   return `+${digits}`;
 }
 
-function readField(contact: any, fieldKey: string): string {
-  const fields = (contact?.customField || contact?.customFields || []) as Array<{ fieldKey?: string; key?: string; value?: unknown }>;
-  const hit = fields.find(f => f.fieldKey === fieldKey || f.key === fieldKey);
+function readById(contact: any, fieldId: string | null): string {
+  if (!fieldId || !contact) return "";
+  const fields = (contact.customField || contact.customFields || []) as Array<{ id?: string; value?: unknown }>;
+  const hit = fields.find((f) => f.id === fieldId);
   return String(hit?.value || "").trim();
 }
 
@@ -54,29 +60,37 @@ export async function GET(req: Request) {
       groups.set(key, prev);
     }
 
+    const studentFieldId = await getCustomFieldIdByKey(FIELD_STUDENT_PHONE);
+    const parentFieldId = await getCustomFieldIdByKey(FIELD_PARENT_PHONE);
+
     const results = [];
     for (const g of groups.values()) {
       const minutes = Math.round(g.seconds / 60);
       const chargeable = g.seconds >= MIN_SECONDS;
       const loginPhone = extractPhoneFromAlias(g.email);
       const contacts = new Map<string, any>();
+      const relatedPhones: string[] = [];
 
       if (loginPhone) {
-        // 1) 只對主電話 Phone
+        // 1) 入課電話對主電話 Phone
         const primary = await findContactByPhone(loginPhone);
         if (primary?.id) contacts.set(primary.id, primary);
 
-        // 2) 讀對到的 contact 的學生電話 / 家長電話
+        // 2) 讀對到的 contact 的 Student Phone / Parent Phone
         const related = new Set<string>();
-        for (const c of [...contacts.values()]) {
-          const sp = readField(c, FIELD_STUDENT_PHONE);
-          const pp = readField(c, FIELD_PARENT_PHONE);
+        for (const c of contacts.values()) {
+          const sp = readById(c, studentFieldId);
+          const pp = readById(c, parentFieldId);
           if (sp) related.add(sp);
           if (pp) related.add(pp);
         }
+        relatedPhones.push(...related);
 
-        // 3) 搵 Student Phone 或 Parent Phone 等於該號碼的 contact
+        // 3) 再用該號碼對 Phone，以及兩個自訂電話欄
         for (const phone of related) {
+          const byPhone = await findContactByPhone(phone);
+          if (byPhone?.id) contacts.set(byPhone.id, byPhone);
+
           for (const c of await findContactsByCustomPhone(FIELD_STUDENT_PHONE, phone)) {
             if (c.id) contacts.set(c.id, c);
           }
@@ -96,6 +110,9 @@ export async function GET(req: Request) {
       results.push({
         name: g.name,
         loginPhone,
+        relatedPhones,
+        studentFieldId,
+        parentFieldId,
         minutes,
         chargeable,
         matchedContacts: [...contacts.keys()],
