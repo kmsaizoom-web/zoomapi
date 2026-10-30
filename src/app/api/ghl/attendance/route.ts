@@ -1,18 +1,19 @@
 // ============================================================
-// [出席計時] 課後拉 Zoom 報告 → 對電話 → 更新 GHL 停留分鐘
+// [出席計時] 課後拉 Zoom 報告 → 對電話（主電話 / 學生電話 / 家長電話）→ 更新 GHL
 // 用法：GET /api/ghl/attendance?webinarId=課堂編號
-// 一次處理成班人，學生唔使開呢條鏈接
 // ============================================================
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { getWebinarParticipants } from "@/lib/zoom";
-import { findContactByPhone, updateContactCustomField } from "@/lib/ghl";
+import { findContactByPhone, findContactsByCustomPhone, updateContactCustomField } from "@/lib/ghl";
 
 const MIN_SECONDS = 60 * 60;
 const FIELD_MINUTES = "contact.attendance_minutes";
 const FIELD_CHARGEABLE = "contact.chargeable";
+const FIELD_STUDENT_PHONE = "contact.students_your_child_phone_number";
+const FIELD_PARENT_PHONE = "contact.parents_phone_number";
 
 function extractPhoneFromAlias(email: string): string | null {
   const m = String(email || "").match(/noemail\+(\d+)/i);
@@ -48,14 +49,25 @@ export async function GET(req: Request) {
     for (const g of groups.values()) {
       const minutes = Math.round(g.seconds / 60);
       const chargeable = g.seconds >= MIN_SECONDS;
-      let contact = null;
       const phone = extractPhoneFromAlias(g.email);
-      if (phone) contact = await findContactByPhone(phone);
 
-      let updated = false;
-      if (contact?.id) {
-        updated = await updateContactCustomField(contact.id, FIELD_MINUTES, minutes);
-        await updateContactCustomField(contact.id, FIELD_CHARGEABLE, chargeable ? "yes" : "no");
+      const contacts = new Map<string, any>();
+      if (phone) {
+        const main = await findContactByPhone(phone);
+        if (main?.id) contacts.set(main.id, main);
+
+        const byStudent = await findContactsByCustomPhone(FIELD_STUDENT_PHONE, phone);
+        for (const c of byStudent) if (c.id) contacts.set(c.id, c);
+
+        const byParent = await findContactsByCustomPhone(FIELD_PARENT_PHONE, phone);
+        for (const c of byParent) if (c.id) contacts.set(c.id, c);
+      }
+
+      const updatedIds: string[] = [];
+      for (const c of contacts.values()) {
+        const ok = await updateContactCustomField(c.id, FIELD_MINUTES, minutes);
+        await updateContactCustomField(c.id, FIELD_CHARGEABLE, chargeable ? "yes" : "no");
+        if (ok) updatedIds.push(c.id);
       }
 
       results.push({
@@ -63,8 +75,8 @@ export async function GET(req: Request) {
         email: g.email,
         minutes,
         chargeable,
-        ghlContactId: contact?.id || null,
-        updated,
+        matchedContacts: [...contacts.keys()],
+        updatedIds,
       });
     }
 
