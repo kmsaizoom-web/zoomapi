@@ -157,7 +157,7 @@ export async function findContactByPhone(phoneRaw: string): Promise<GhlContact |
 // -------- Custom field helpers --------
 const cfKeyToIdCache = new Map<string, string | null>();
 
-async function getCustomFieldIdByKey(fieldKey: string): Promise<string | null> {
+export async function getCustomFieldIdByKey(fieldKey: string): Promise<string | null> {
   if (cfKeyToIdCache.has(fieldKey)) return cfKeyToIdCache.get(fieldKey)!;
 
   let page = 1;
