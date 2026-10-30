@@ -1,6 +1,9 @@
 // ============================================================
-// [出席計時] 課後拉 Zoom 報告 → 對電話（主電話 / 學生電話 / 家長電話）→ 更新 GHL
-// 用法：GET /api/ghl/attendance?webinarId=課堂編號
+// [出席計時]
+// 1. 入課電話對 contact.Phone
+// 2. 讀該 contact 的 Student Phone / Parent Phone
+// 3. 再搵 Student Phone 或 Parent Phone 等於該號碼的 contact
+// 4. 全部寫入同一套出席時間
 // ============================================================
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,6 +25,12 @@ function extractPhoneFromAlias(email: string): string | null {
   if (digits.startsWith("852") && digits.length >= 11) return `+${digits}`;
   if (digits.length === 8) return `+852${digits}`;
   return `+${digits}`;
+}
+
+function readField(contact: any, fieldKey: string): string {
+  const fields = (contact?.customField || contact?.customFields || []) as Array<{ fieldKey?: string; key?: string; value?: unknown }>;
+  const hit = fields.find(f => f.fieldKey === fieldKey || f.key === fieldKey);
+  return String(hit?.value || "").trim();
 }
 
 export async function GET(req: Request) {
@@ -49,18 +58,32 @@ export async function GET(req: Request) {
     for (const g of groups.values()) {
       const minutes = Math.round(g.seconds / 60);
       const chargeable = g.seconds >= MIN_SECONDS;
-      const phone = extractPhoneFromAlias(g.email);
-
+      const loginPhone = extractPhoneFromAlias(g.email);
       const contacts = new Map<string, any>();
-      if (phone) {
-        const main = await findContactByPhone(phone);
-        if (main?.id) contacts.set(main.id, main);
 
-        const byStudent = await findContactsByCustomPhone(FIELD_STUDENT_PHONE, phone);
-        for (const c of byStudent) if (c.id) contacts.set(c.id, c);
+      if (loginPhone) {
+        // 1) 只對主電話 Phone
+        const primary = await findContactByPhone(loginPhone);
+        if (primary?.id) contacts.set(primary.id, primary);
 
-        const byParent = await findContactsByCustomPhone(FIELD_PARENT_PHONE, phone);
-        for (const c of byParent) if (c.id) contacts.set(c.id, c);
+        // 2) 讀對到的 contact 的學生電話 / 家長電話
+        const related = new Set<string>();
+        for (const c of [...contacts.values()]) {
+          const sp = readField(c, FIELD_STUDENT_PHONE);
+          const pp = readField(c, FIELD_PARENT_PHONE);
+          if (sp) related.add(sp);
+          if (pp) related.add(pp);
+        }
+
+        // 3) 搵 Student Phone 或 Parent Phone 等於該號碼的 contact
+        for (const phone of related) {
+          for (const c of await findContactsByCustomPhone(FIELD_STUDENT_PHONE, phone)) {
+            if (c.id) contacts.set(c.id, c);
+          }
+          for (const c of await findContactsByCustomPhone(FIELD_PARENT_PHONE, phone)) {
+            if (c.id) contacts.set(c.id, c);
+          }
+        }
       }
 
       const updatedIds: string[] = [];
@@ -72,7 +95,7 @@ export async function GET(req: Request) {
 
       results.push({
         name: g.name,
-        email: g.email,
+        loginPhone,
         minutes,
         chargeable,
         matchedContacts: [...contacts.keys()],
