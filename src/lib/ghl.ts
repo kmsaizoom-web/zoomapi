@@ -245,3 +245,29 @@ export async function updateContactCustomField(contactId: string, fieldKey: stri
   }
   return false;
 }
+// ============================================================
+// [出席計時] 用自訂欄位電話再搵 contact（學生電話 / 家長電話）
+// ============================================================
+export async function findContactsByCustomPhone(fieldKey: string, phoneRaw: string): Promise<GhlContact[]> {
+  const target = normalizeToE164HK(phoneRaw);
+  if (!target) return [];
+  const fieldId = await getCustomFieldIdByKey(fieldKey);
+  if (!fieldId) return [];
+
+  const found: GhlContact[] = [];
+  const queries = buildPhoneSearchVariants(phoneRaw);
+  for (const q of queries) {
+    const data = await ghlGet("/v1/contacts/", { query: q, limit: 50, page: 1 });
+    const arr = pickContactsArray(data);
+    for (const c of arr) {
+      const fields = (c.customField || c.customFields || []) as GhlCustomKV[];
+      const hit = fields.find(f => f.id === fieldId);
+      const val = hit ? normalizeToE164HK(String(hit.value || "")) : "";
+      if (val && val === target) found.push(c);
+    }
+  }
+  // 去重
+  const map = new Map<string, GhlContact>();
+  for (const c of found) if (c.id) map.set(c.id, c);
+  return [...map.values()];
+}
