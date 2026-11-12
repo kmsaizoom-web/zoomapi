@@ -17,7 +17,7 @@ import {
   getCustomFieldIdByKey,
 } from "@/lib/ghl";
 
-const MIN_SECONDS = 60 * 60;
+const MIN_SECONDS = 30 * 60;
 const FIELD_MINUTES = "contact.attendance_minutes";
 const FIELD_CHARGEABLE = "contact.chargeable";
 const FIELD_STUDENT_PHONE = "contact.students_your_child_phone_number";
