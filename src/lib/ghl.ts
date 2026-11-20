@@ -316,10 +316,7 @@ export async function getContactCustomFieldValue(contactId: string, fieldKey: st
 export async function getLocationCustomValues(): Promise<Record<string, string>> {
   const token = process.env.GHL_PIT_TOKEN;
   const locationId = process.env.GHL_LOCATION_ID;
-  if (!token || !locationId) {
-    console.log("DEBUG: GHL_PIT_TOKEN or GHL_LOCATION_ID missing");
-    return {};
-  }
+  if (!token || !locationId) return {};
 
   const result: Record<string, string> = {};
   const url = `https://services.leadconnectorhq.com/locations/${locationId}/customValues`;
@@ -332,11 +329,9 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
         Version: "2023-02-21",
       },
     });
-    const text = await r.text();
-    console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 1000));
     if (!r.ok) return result;
 
-    const data = JSON.parse(text);
+    const data = await r.json();
     const arr = data.customValues || [];
     for (const item of arr) {
       const key = String(item.name || "").trim();
@@ -344,7 +339,7 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
       if (key) result[key] = val;
     }
   } catch (e) {
-    console.log("DEBUG: Error", String(e));
+    console.log("Custom values error:", String(e));
   }
   return result;
 }
