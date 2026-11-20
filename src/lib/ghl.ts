@@ -311,33 +311,6 @@ export async function getContactCustomFieldValue(contactId: string, fieldKey: st
 }
 
 // ============================================================
-// [出席計時] 讀取 location custom values
-// 需要環境變數 GHL_LOCATION_ID
-// ============================================================
-export async function getLocationCustomValues(): Promise<Record<string, string>> {
-  const token = reqEnv("GHL_API_KEY");
-  const locationId = process.env.GHL_LOCATION_ID;
-  if (!locationId) throw new Error("Missing GHL_LOCATION_ID");
-
-  const result: Record<string, string> = {};
-  for (const base of DEFAULT_BASES) {
-    try {
-      const r = await fetch(`${base}/v1/locations/${locationId}/customValues`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      });
-      if (!r.ok) continue;
-      const data = await r.json();
-      const arr = data.customValues || data || [];
-      for (const item of arr) {
-        const key = String(item.name || item.key || "").trim();
-        const val = String(item.value || "").trim();
-        if (key) result[key] = val;
-      }
-      return result;
-    } catch {}
-  }
-
-  // ============================================================
 // [DEBUG] 讀取 location custom values
 // ============================================================
 export async function getLocationCustomValues(): Promise<Record<string, string>> {
@@ -372,7 +345,5 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
       console.log("DEBUG: Error", String(e));
     }
   }
-  return result;
-}
   return result;
 }
