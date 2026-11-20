@@ -328,10 +328,14 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
       const url = `${base}/v1/locations/${locationId}/customValues`;
       console.log("DEBUG: Fetching", url);
       const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          Version: "2023-02-21",   // ← 必須加這個
+        },
       });
       const text = await r.text();
-      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 500));
+      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 800));
       if (!r.ok) continue;
       const data = JSON.parse(text);
       const arr = data.customValues || data || [];
