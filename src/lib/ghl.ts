@@ -13,8 +13,9 @@ export interface GhlContact {
   lastName?: string | null;
   email?: string | null;
   phone?: string | null;
-  customField?: GhlCustomKV[];   // some accounts
-  customFields?: GhlCustomKV[];  // other accounts
+  customField?: GhlCustomKV[];
+  customFields?: GhlCustomKV[];
+  tags?: string[];
   [k: string]: unknown;
 }
 interface ContactsShape {
@@ -25,7 +26,7 @@ interface ContactsShape {
 }
 
 const REQUIRED_ENV = ["GHL_API_KEY"] as const;
-function reqEnv(name: (typeof REQUIRED_ENV)[number]): string {
+function reqEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env ${name}`);
   return v;
@@ -91,7 +92,6 @@ function pickContactsArray(data: Json): GhlContact[] {
   return [];
 }
 
-// -------- Phone normalization (HK-centric but safe elsewhere) --------
 function normalizeToE164HK(input: string): string {
   let s = (input || "").trim();
   if (!s) return s;
@@ -99,9 +99,9 @@ function normalizeToE164HK(input: string): string {
   if (s.startsWith("+")) return s.replace(/[^\d+]/g, "");
   const digits = s.replace(/\D/g, "");
   if (!digits) return s;
-  if (/^\d{8}$/.test(digits)) return `+852${digits}`;   // HK local
-  if (/^852\d{8}$/.test(digits)) return `+${digits}`;   // HK with 852
-  return `+${digits}`;                                   // generic
+  if (/^\d{8}$/.test(digits)) return `+852${digits}`;
+  if (/^852\d{8}$/.test(digits)) return `+${digits}`;
+  return `+${digits}`;
 }
 
 function unique<T>(arr: T[]): T[] {
@@ -113,6 +113,7 @@ function unique<T>(arr: T[]): T[] {
   }
   return out;
 }
+
 function buildPhoneSearchVariants(raw: string): string[] {
   const e164 = normalizeToE164HK(raw);
   const digits = raw.replace(/\D/g, "");
@@ -123,7 +124,6 @@ function buildPhoneSearchVariants(raw: string): string[] {
   return unique(cands).filter(Boolean);
 }
 
-// Only accept rows whose **core contact.phone** === normalized target
 async function findByCorePhoneStrict(targetRaw: string): Promise<GhlContact | null> {
   const normalizedTarget = normalizeToE164HK(targetRaw);
   if (!normalizedTarget) return null;
@@ -154,7 +154,6 @@ export async function findContactByPhone(phoneRaw: string): Promise<GhlContact |
   try { return await findByCorePhoneStrict(phoneRaw.trim()); } catch { return null; }
 }
 
-// -------- Custom field helpers --------
 const cfKeyToIdCache = new Map<string, string | null>();
 
 export async function getCustomFieldIdByKey(fieldKey: string): Promise<string | null> {
@@ -200,7 +199,6 @@ function valueToString(val: unknown): string {
   return "";
 }
 
-// Extract the value of {{ contact.zoom_display_name }} from a contact
 export async function extractZoomDisplayName(contact: GhlContact): Promise<string | null> {
   const key = "contact.zoom_display_name";
   const id = await getCustomFieldIdByKey(key);
@@ -219,10 +217,7 @@ export async function extractZoomDisplayName(contact: GhlContact): Promise<strin
   }
   return null;
 }
-// ============================================================
-// [出席計時] 更新 GHL contact 自訂欄位（停留分鐘 / 可收費）
-// 課後 attendance API 用，唔影響入課時搵 contact
-// ============================================================
+
 export async function updateContactCustomField(contactId: string, fieldKey: string, value: string | number): Promise<boolean> {
   const token = reqEnv("GHL_API_KEY");
   const fieldId = await getCustomFieldIdByKey(fieldKey);
@@ -245,9 +240,7 @@ export async function updateContactCustomField(contactId: string, fieldKey: stri
   }
   return false;
 }
-// ============================================================
-// [出席計時] 用自訂欄位電話再搵 contact（學生電話 / 家長電話）
-// ============================================================
+
 export async function findContactsByCustomPhone(fieldKey: string, phoneRaw: string): Promise<GhlContact[]> {
   const target = normalizeToE164HK(phoneRaw);
   if (!target) return [];
@@ -266,8 +259,82 @@ export async function findContactsByCustomPhone(fieldKey: string, phoneRaw: stri
       if (val && val === target) found.push(c);
     }
   }
-  // 去重
   const map = new Map<string, GhlContact>();
   for (const c of found) if (c.id) map.set(c.id, c);
   return [...map.values()];
+}
+
+// ============================================================
+// [出席計時] 拉有指定 tag 的所有 contact
+// ============================================================
+export async function getContactsByTag(tag: string): Promise<GhlContact[]> {
+  const all: GhlContact[] = [];
+  let page = 1;
+  for (let i = 0; i < 50; i++) {
+    const data = await ghlGet("/v1/contacts/", { query: tag, limit: 100, page });
+    const arr = pickContactsArray(data);
+    const filtered = arr.filter((c: any) => {
+      const tags = (c.tags || []).map((t: string) => String(t).toLowerCase());
+      return tags.includes(tag.toLowerCase());
+    });
+    all.push(...filtered);
+    if (arr.length < 100) break;
+    page++;
+  }
+  const map = new Map<string, GhlContact>();
+  for (const c of all) if (c.id) map.set(c.id, c);
+  return [...map.values()];
+}
+
+// ============================================================
+// [出席計時] 讀取 contact 某個自訂欄位現有值
+// ============================================================
+export async function getContactCustomFieldValue(contactId: string, fieldKey: string): Promise<string> {
+  const token = reqEnv("GHL_API_KEY");
+  const fieldId = await getCustomFieldIdByKey(fieldKey);
+  if (!fieldId) return "";
+
+  for (const base of DEFAULT_BASES) {
+    try {
+      const r = await fetch(`${base}/v1/contacts/${contactId}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const contact = data.contact || data;
+      const fields = (contact.customField || contact.customFields || []) as Array<{ id?: string; value?: unknown }>;
+      const hit = fields.find(f => f.id === fieldId);
+      return String(hit?.value ?? "");
+    } catch {}
+  }
+  return "";
+}
+
+// ============================================================
+// [出席計時] 讀取 location custom values
+// 需要環境變數 GHL_LOCATION_ID
+// ============================================================
+export async function getLocationCustomValues(): Promise<Record<string, string>> {
+  const token = reqEnv("GHL_API_KEY");
+  const locationId = process.env.GHL_LOCATION_ID;
+  if (!locationId) throw new Error("Missing GHL_LOCATION_ID");
+
+  const result: Record<string, string> = {};
+  for (const base of DEFAULT_BASES) {
+    try {
+      const r = await fetch(`${base}/v1/locations/${locationId}/customValues`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const arr = data.customValues || data || [];
+      for (const item of arr) {
+        const key = String(item.name || item.key || "").trim();
+        const val = String(item.value || "").trim();
+        if (key) result[key] = val;
+      }
+      return result;
+    } catch {}
+  }
+  return result;
 }
