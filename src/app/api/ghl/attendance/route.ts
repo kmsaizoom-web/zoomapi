@@ -36,12 +36,12 @@ const FIELD_GRADE = "contact.current_grade";
 const TAG_PAID = "paid student";
 
 const GRADE_MAP: Record<string, string> = {
-  s1_zoom_meeting_id: "中一",
-  s2_zoom_meeting_id: "中二",
-  s3_zoom_meeting_id: "中三",
-  s4_zoom_meeting_id: "中四",
-  s5_zoom_meeting_id: "中五",
-  s6_zoom_meeting_id: "中六",
+  "S1 Zoom Meeting ID": "中一",
+  "S2 Zoom Meeting ID": "中二",
+  "S3 Zoom Meeting ID": "中三",
+  "S4 Zoom Meeting ID": "中四",
+  "S5 Zoom Meeting ID": "中五",
+  "S6 Zoom Meeting ID": "中六",
 };
 
 function extractPhoneFromAlias(email: string): string | null {
