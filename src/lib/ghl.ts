@@ -323,19 +323,24 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
   console.log("DEBUG: Using locationId =", locationId);
 
   const result: Record<string, string> = {};
-  for (const base of DEFAULT_BASES) {
+  const bases = [
+    "https://services.leadconnectorhq.com",
+    "https://rest.gohighlevel.com",
+  ];
+
+  for (const base of bases) {
     try {
-      const url = `${base}/v1/locations/${locationId}/customValues`;
+      const url = `${base}/locations/${locationId}/customValues`;
       console.log("DEBUG: Fetching", url);
       const r = await fetch(url, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
-          Version: "2023-02-21",   // ← 必須加這個
+          Version: "2023-02-21",
         },
       });
       const text = await r.text();
-      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 800));
+      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 1000));
       if (!r.ok) continue;
       const data = JSON.parse(text);
       const arr = data.customValues || data || [];
@@ -344,7 +349,7 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
         const val = String(item.value || "").trim();
         if (key) result[key] = val;
       }
-      return result;
+      if (Object.keys(result).length > 0) return result;
     } catch (e) {
       console.log("DEBUG: Error", String(e));
     }
