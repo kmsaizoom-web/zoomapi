@@ -311,48 +311,40 @@ export async function getContactCustomFieldValue(contactId: string, fieldKey: st
 }
 
 // ============================================================
-// [DEBUG] 讀取 location custom values
+// [出席計時] 讀取 location custom values（用 Private Integration Token）
 // ============================================================
 export async function getLocationCustomValues(): Promise<Record<string, string>> {
-  const token = reqEnv("GHL_API_KEY");
+  const token = process.env.GHL_PIT_TOKEN;
   const locationId = process.env.GHL_LOCATION_ID;
-  if (!locationId) {
-    console.log("DEBUG: GHL_LOCATION_ID is missing");
+  if (!token || !locationId) {
+    console.log("DEBUG: GHL_PIT_TOKEN or GHL_LOCATION_ID missing");
     return {};
   }
-  console.log("DEBUG: Using locationId =", locationId);
 
   const result: Record<string, string> = {};
-  const bases = [
-    "https://services.leadconnectorhq.com",
-    "https://rest.gohighlevel.com",
-  ];
+  const url = `https://services.leadconnectorhq.com/locations/${locationId}/customValues`;
 
-  for (const base of bases) {
-    try {
-      const url = `${base}/locations/${locationId}/customValues`;
-      console.log("DEBUG: Fetching", url);
-      const r = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-          Version: "2023-02-21",
-        },
-      });
-      const text = await r.text();
-      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 1000));
-      if (!r.ok) continue;
-      const data = JSON.parse(text);
-      const arr = data.customValues || data || [];
-      for (const item of arr) {
-        const key = String(item.name || item.key || "").trim();
-        const val = String(item.value || "").trim();
-        if (key) result[key] = val;
-      }
-      if (Object.keys(result).length > 0) return result;
-    } catch (e) {
-      console.log("DEBUG: Error", String(e));
+  try {
+    const r = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        Version: "2023-02-21",
+      },
+    });
+    const text = await r.text();
+    console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 1000));
+    if (!r.ok) return result;
+
+    const data = JSON.parse(text);
+    const arr = data.customValues || [];
+    for (const item of arr) {
+      const key = String(item.name || "").trim();
+      const val = String(item.value || "").trim();
+      if (key) result[key] = val;
     }
+  } catch (e) {
+    console.log("DEBUG: Error", String(e));
   }
   return result;
 }
