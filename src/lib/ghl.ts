@@ -336,5 +336,43 @@ export async function getLocationCustomValues(): Promise<Record<string, string>>
       return result;
     } catch {}
   }
+
+  // ============================================================
+// [DEBUG] 讀取 location custom values
+// ============================================================
+export async function getLocationCustomValues(): Promise<Record<string, string>> {
+  const token = reqEnv("GHL_API_KEY");
+  const locationId = process.env.GHL_LOCATION_ID;
+  if (!locationId) {
+    console.log("DEBUG: GHL_LOCATION_ID is missing");
+    return {};
+  }
+  console.log("DEBUG: Using locationId =", locationId);
+
+  const result: Record<string, string> = {};
+  for (const base of DEFAULT_BASES) {
+    try {
+      const url = `${base}/v1/locations/${locationId}/customValues`;
+      console.log("DEBUG: Fetching", url);
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      const text = await r.text();
+      console.log("DEBUG: Status", r.status, "Body:", text.slice(0, 500));
+      if (!r.ok) continue;
+      const data = JSON.parse(text);
+      const arr = data.customValues || data || [];
+      for (const item of arr) {
+        const key = String(item.name || item.key || "").trim();
+        const val = String(item.value || "").trim();
+        if (key) result[key] = val;
+      }
+      return result;
+    } catch (e) {
+      console.log("DEBUG: Error", String(e));
+    }
+  }
+  return result;
+}
   return result;
 }
