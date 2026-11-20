@@ -151,6 +151,9 @@ export async function GET(req: Request) {
 
     // ========== 新增功能：按年級累計 + 沒達標設 chargeable = no ==========
     const customValues = await getLocationCustomValues();
+    // === DEBUG START ===
+console.log("CUSTOM VALUES:", JSON.stringify(customValues, null, 2));
+// === DEBUG END ===
     let targetGrade = "";
     for (const [key, grade] of Object.entries(GRADE_MAP)) {
       const val = cleanId(customValues[key] || "");
