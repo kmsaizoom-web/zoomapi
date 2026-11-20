@@ -5,8 +5,9 @@
 // 新增功能：
 //   - 用 GHL custom value 對應年級
 //   - 只對該年級 + paid student 累計 total_class_ticket / absent_class_times
+//   - 今堂沒達標（包括完全沒入）→ chargeable 設為 no
 //   - 同時更新學生同相關家長
-//   - 即使沒填 form 都可以計缺席
+//   - attendance_minutes 只在有入 Zoom 時更新
 // ============================================================
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -148,7 +149,7 @@ export async function GET(req: Request) {
       });
     }
 
-    // ========== 新增功能：按年級累計出席 / 缺席次數 ==========
+    // ========== 新增功能：按年級累計 + 沒達標設 chargeable = no ==========
     const customValues = await getLocationCustomValues();
     let targetGrade = "";
     for (const [key, grade] of Object.entries(GRADE_MAP)) {
@@ -210,10 +211,14 @@ export async function GET(req: Request) {
         for (const c of toUpdate.values()) {
           const curTotal = Number(await getContactCustomFieldValue(c.id, FIELD_TOTAL)) || 0;
           const curAbsent = Number(await getContactCustomFieldValue(c.id, FIELD_ABSENT)) || 0;
+
           if (isAttended) {
             await updateContactCustomField(c.id, FIELD_TOTAL, curTotal + 1);
+            // chargeable 已由原有邏輯設為 yes
           } else {
             await updateContactCustomField(c.id, FIELD_ABSENT, curAbsent + 1);
+            // 今堂沒達標（包括完全沒入）→ chargeable 設為 no
+            await updateContactCustomField(c.id, FIELD_CHARGEABLE, "no");
           }
           updatedIds.push(c.id);
         }
